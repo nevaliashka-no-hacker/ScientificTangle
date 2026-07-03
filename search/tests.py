@@ -1,227 +1,551 @@
+"""
+Семантический поиск по документам с JSON интерфейсом
+Поддерживает пакетную обработку документов из JSON
+"""
+
 from sentence_transformers import SentenceTransformer
 from elasticsearch import Elasticsearch
 import numpy as np
+from typing import List, Dict, Optional
+from dataclasses import dataclass, asdict
+from datetime import datetime
 import json
 
-# Класс конфигурации (упрощённый)
-class Config:
-    ES_HOST = "http://localhost:9200"
-    EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-    ES_INDEX = "test_scientific_docs"
 
-class Search:
-    def __init__(self, config):
-        self.es = Elasticsearch(config.ES_HOST)
-        self.model = SentenceTransformer(config.EMBEDDING_MODEL)
-        self.index_name = config.ES_INDEX
+@dataclass
+class DocumentMetadata:
+    """Метаданные пакета документов"""
+    дата_обработки: str
+    общее_количество_документов: int
+    типы_документов: Dict[str, int]
+
+@dataclass
+class Document:
+    """Отдельный документ"""
+    название: str
+    содержание: str
+    тип_файла: str
+    количество_страниц: int
+
+@dataclass
+class SearchRequest:
+    """Запрос на поиск"""
+    query: str
+    top_k: int = 5
+    filters: Optional[Dict] = None
+    min_score: float = 0.0
+
+@dataclass
+class SearchResultItem:
+    """Один результат поиска"""
+    название: str
+    тип_файла: str
+    релевантность: float
+    фрагмент: str
+    страниц: int
+
+@dataclass
+class SearchMetadata:
+    """Метаданные результатов поиска"""
+    дата_поиска: str
+    время_выполнения_мс: float
+    запрос: str
+    всего_найдено: int
+    возвращено: int
+
+@dataclass
+class SearchResponse:
+    """Полный ответ поиска"""
+    метаданные: SearchMetadata
+    результаты: List[SearchResultItem]
+    рекомендации: Optional[List[str]] = None
+
+class SemanticSearchJSON:
+    """
+    Семантический поиск с JSON интерфейсом.
+    Принимает JSON с документами, возвращает JSON с результатами.
+    """
+    
+    def __init__(self, 
+                 es_host: str = "http://localhost:9200",
+                 model_name: str = "paraphrase-multilingual-MiniLM-L12-v2",
+                 index_name: str = "documents"):
+        """
+        Args:
+            es_host: Адрес Elasticsearch
+            model_name: Модель для эмбеддингов
+            index_name: Название индекса
+        """
+        self.es = Elasticsearch(es_host)
+        self.model = SentenceTransformer(model_name)
+        self.index_name = index_name
         self._init_index()
-
+    
     def _init_index(self):
+        """Инициализация индекса Elasticsearch"""
         mapping = {
             "mappings": {
                 "properties": {
-                    "title": {
-                        "type": "text", 
-                        "analyzer": "russian"
-                    },
-                    "abstract": {
-                        "type": "text", 
-                        "analyzer": "russian"
-                    },
+                    "название": {"type": "keyword"},
+                    "содержание": {"type": "text", "analyzer": "russian"},
+                    "тип_файла": {"type": "keyword"},
+                    "количество_страниц": {"type": "integer"},
                     "embedding": {
                         "type": "dense_vector",
                         "dims": 384,
                         "index": True,
                         "similarity": "cosine"
-                    },
-                    "year": {"type": "integer"},
-                    "geography": {"type": "keyword"},
-                    "materials": {"type": "keyword"},
-                    "processes": {"type": "keyword"},
+                    }
                 }
             }
         }
         
         if not self.es.indices.exists(index=self.index_name):
             self.es.indices.create(index=self.index_name, body=mapping)
-            print(f"✓ Индекс '{self.index_name}' создан")
-        else:
-            print(f"✓ Индекс '{self.index_name}' уже существует")
-
-    def index_document(self, doc):
-        text = f"{doc.get('title', '')} {doc.get('abstract', '')}"
-        embedding = self.model.encode(text).tolist()
-        doc['embedding'] = embedding
-        self.es.index(index=self.index_name, body=doc)
-        print(f"✓ Документ '{doc.get('title', '')}' добавлен")
-
-    def semantic_search(self, request, top_k=20):
-        embedding = self.model.encode(request).tolist()
+    
+    def load_documents(self, json_data: Dict) -> Dict:
+        """
+        Загрузка документов из JSON.
         
+        Входной формат:
+        {
+            "метаданные": {
+                "дата_обработки": "2024-01-15T10:30:00",
+                "общее_количество_документов": 3,
+                "типы_документов": {".pdf": 2, ".docx": 1}
+            },
+            "документы": [
+                {
+                    "название": "папка1/документ.pdf",
+                    "содержание": "Текст документа...",
+                    "тип_файла": ".pdf",
+                    "количество_страниц": 10
+                }
+            ]
+        }
+        
+        Returns:
+            {
+                "статус": "success",
+                "загружено": 3,
+                "ошибки": []
+            }
+        """
+        errors = []
+        loaded = 0
+        
+        for doc in json_data.get("документы", []):
+            try:
+                # Создание эмбеддинга
+                embedding = self.model.encode(doc["содержание"]).tolist()
+                
+                # Документ для Elasticsearch
+                es_doc = {
+                    "название": doc["название"],
+                    "содержание": doc["содержание"],
+                    "тип_файла": doc["тип_файла"],
+                    "количество_страниц": doc.get("количество_страниц", 0),
+                    "embedding": embedding,
+                    "дата_загрузки": datetime.now().isoformat()
+                }
+                
+                self.es.index(index=self.index_name, body=es_doc)
+                loaded += 1
+                
+            except Exception as e:
+                errors.append({
+                    "файл": doc.get("название", "неизвестно"),
+                    "ошибка": str(e)
+                })
+        
+        return {
+            "статус": "success" if loaded > 0 else "error",
+            "загружено": loaded,
+            "всего_в_пакете": json_data.get("метаданные", {}).get("общее_количество_документов", 0),
+            "ошибки": errors
+        }
+    
+    def search(self, request: Dict) -> Dict:
+        """
+        Поиск по документам.
+        
+        Входной формат:
+        {
+            "query": "обессоливание шахтных вод",
+            "top_k": 5,
+            "filters": {
+                "тип_файла": ".pdf",
+                "мин_страниц": 5
+            },
+            "min_score": 0.5
+        }
+        
+        Returns:
+        {
+            "метаданные": {
+                "дата_поиска": "2024-01-15T10:30:00",
+                "время_выполнения_мс": 45.2,
+                "запрос": "обессоливание шахтных вод",
+                "всего_найдено": 15,
+                "возвращено": 5
+            },
+            "результаты": [...],
+            "рекомендации": [...]
+        }
+        """
+        import time
+        start_time = time.time()
+        
+        query = request.get("query", "")
+        top_k = request.get("top_k", 5)
+        filters = request.get("filters", {})
+        min_score = request.get("min_score", 0.0)
+        
+        # Создание эмбеддинга запроса
+        query_embedding = self.model.encode(query).tolist()
+        
+        # Построение поискового запроса
         search_body = {
             "knn": {
                 "field": "embedding",
-                "query_vector": embedding,
-                "k": top_k,
+                "query_vector": query_embedding,
+                "k": top_k * 2,  # Больше кандидатов для фильтрации
                 "num_candidates": 100
             },
-            "_source": ["title", "abstract", "year", "geography"]
+            "_source": ["название", "содержание", "тип_файла", "количество_страниц"]
         }
         
-        results = self.es.search(index=self.index_name, body=search_body)
+        # Добавление фильтров
+        if filters:
+            filter_clauses = []
+            
+            if "тип_файла" in filters:
+                filter_clauses.append({
+                    "term": {"тип_файла": filters["тип_файла"]}
+                })
+            
+            if "мин_страниц" in filters:
+                filter_clauses.append({
+                    "range": {
+                        "количество_страниц": {
+                            "gte": filters["мин_страниц"]
+                        }
+                    }
+                })
+            
+            if filter_clauses:
+                search_body["post_filter"] = {
+                    "bool": {"must": filter_clauses}
+                }
         
-        return [
-            {
-                "title": hit["_source"]["title"],
-                "abstract": hit["_source"].get("abstract", "")[:200] + "...",
-                "year": hit["_source"].get("year"),
-                "score": hit["_score"]
+        # Выполнение поиска
+        try:
+            results = self.es.search(index=self.index_name, body=search_body)
+        except Exception as e:
+            return {
+                "метаданные": SearchMetadata(
+                    дата_поиска=datetime.now().isoformat(),
+                    время_выполнения_мс=0,
+                    запрос=query,
+                    всего_найдено=0,
+                    возвращено=0
+                ),
+                "результаты": [],
+                "рекомендации": [f"Ошибка поиска: {str(e)}"]
             }
-            for hit in results["hits"]["hits"]
+        
+        # Обработка результатов
+        search_results = []
+        for hit in results["hits"]["hits"]:
+            score = hit["_score"]
+            
+            # Фильтрация по минимальному score
+            if score < min_score:
+                continue
+            
+            source = hit["_source"]
+            
+            # Извлечение релевантного фрагмента
+            fragment = self._extract_fragment(
+                source.get("содержание", ""),
+                query,
+                max_length=200
+            )
+            
+            search_results.append(SearchResultItem(
+                название=source.get("название", ""),
+                тип_файла=source.get("тип_файла", ""),
+                релевантность=round(score, 4),
+                фрагмент=fragment,
+                страниц=source.get("количество_страниц", 0)
+            ))
+            
+            if len(search_results) >= top_k:
+                break
+        
+        # Время выполнения
+        elapsed_ms = (time.time() - start_time) * 1000
+        
+        # Рекомендации
+        recommendations = self._generate_recommendations(
+            query, search_results, filters
+        )
+        
+        # Формирование ответа
+        response = {
+            "метаданные": {
+                "дата_поиска": datetime.now().isoformat(),
+                "время_выполнения_мс": round(elapsed_ms, 2),
+                "запрос": query,
+                "всего_найдено": results["hits"]["total"]["value"],
+                "возвращено": len(search_results)
+            },
+            "результаты": [asdict(r) for r in search_results],
+            "рекомендации": recommendations
+        }
+        
+        return response
+    
+    def _extract_fragment(self, text: str, query: str, max_length: int = 200) -> str:
+        """Извлечение релевантного фрагмента текста"""
+        
+        # Поиск ключевых слов запроса в тексте
+        query_words = set(query.lower().split())
+        sentences = text.replace('\n', ' ').split('.')
+        
+        best_sentence = ""
+        best_score = 0
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            
+            # Считаем пересечение слов
+            sentence_words = set(sentence.lower().split())
+            score = len(query_words & sentence_words)
+            
+            if score > best_score:
+                best_score = score
+                best_sentence = sentence
+        
+        if best_sentence:
+            if len(best_sentence) > max_length:
+                # Ищем позицию ключевых слов
+                pos = len(best_sentence) // 2
+                for word in query_words:
+                    idx = best_sentence.lower().find(word)
+                    if idx != -1:
+                        pos = idx
+                        break
+                
+                start = max(0, pos - max_length // 2)
+                end = min(len(best_sentence), start + max_length)
+                best_sentence = "..." + best_sentence[start:end] + "..."
+            
+            return best_sentence
+        
+        return text[:max_length] + "..."
+    
+    def _generate_recommendations(self, 
+                                  query: str, 
+                                  results: List[SearchResultItem],
+                                  filters: Dict) -> List[str]:
+        """Генерация рекомендаций на основе результатов"""
+        
+        recommendations = []
+        
+        if len(results) == 0:
+            recommendations.append("📌 По вашему запросу ничего не найдено")
+            recommendations.append("💡 Попробуйте:")
+            recommendations.append("  • Использовать синонимы (например, 'деминерализация' вместо 'обессоливание')")
+            recommendations.append("  • Убрать фильтры для расширения поиска")
+            recommendations.append("  • Проверить запрос на английском языке")
+        
+        elif len(results) < 3:
+            recommendations.append(f"📌 Найдено только {len(results)} результатов")
+            recommendations.append("💡 Рекомендации:")
+            recommendations.append("  • Попробуйте убрать фильтры")
+            recommendations.append("  • Используйте более общие термины")
+        
+        else:
+            # Анализ типов файлов
+            file_types = {}
+            for r in results:
+                ft = r.тип_файла
+                file_types[ft] = file_types.get(ft, 0) + 1
+            
+            if len(file_types) == 1:
+                ft = list(file_types.keys())[0]
+                recommendations.append(f"📌 Все результаты имеют формат {ft}")
+                recommendations.append(f"💡 Возможно, стоит поискать документы других форматов")
+            
+            # Рекомендация по релевантности
+            avg_score = np.mean([r.релевантность for r in results])
+            if avg_score < 0.7:
+                recommendations.append("📌 Средняя релевантность низкая")
+                recommendations.append("💡 Попробуйте уточнить запрос")
+        
+        return recommendations
+
+
+def test_semantic_search():
+    """Тестирование семантического поиска"""
+    
+    print("="*70)
+    print("ТЕСТИРОВАНИЕ СЕМАНТИЧЕСКОГО ПОИСКА (JSON)")
+    print("="*70)
+    
+    # Тестовые данные в JSON формате
+    input_json = {
+        "метаданные": {
+            "дата_обработки": "2024-01-15T10:30:00",
+            "общее_количество_документов": 6,
+            "типы_документов": {
+                ".pdf": 3,
+                ".docx": 2,
+                ".txt": 1
+            }
+        },
+        "документы": [
+            {
+                "название": "отчёты/электроэкстракция_никеля.pdf",
+                "содержание": "Исследование процесса электроэкстракции никеля из сульфатных растворов. "
+                             "Оптимальная температура 60°C, скорость циркуляции католита 0.08 м/с. "
+                             "Выход по току достигает 95% при плотности тока 200 А/м².",
+                "тип_файла": ".pdf",
+                "количество_страниц": 15
+            },
+            {
+                "название": "зарубежные/nickel_electrowinning.pdf",
+                "содержание": "Study of nickel electrowinning from chloride media. "
+                             "Optimal conditions: temperature 65°C, current density 250 A/m². "
+                             "Current efficiency up to 92%.",
+                "тип_файла": ".pdf",
+                "количество_страниц": 12
+            },
+            {
+                "название": "отчёты/обессоливание_шахтных_вод.docx",
+                "содержание": "Применение обратного осмоса для обессоливания шахтных вод. "
+                             "Исходная концентрация сульфатов 200-300 мг/л, хлоридов 150-250 мг/л. "
+                             "После очистки содержание солей менее 50 мг/л. "
+                             "Производительность установки 100 м³/сут.",
+                "тип_файла": ".docx",
+                "количество_страниц": 25
+            },
+            {
+                "название": "зарубежные/mine_water_desalination.pdf",
+                "содержание": "Desalination of mine water using electrodialysis. "
+                             "Removal of sulfates up to 500 mg/L with efficiency >90%. "
+                             "Energy consumption 2.5 kWh/m³.",
+                "тип_файла": ".pdf",
+                "количество_страниц": 18
+            },
+            {
+                "название": "отчёты/плавка_меди_ПВП.docx",
+                "содержание": "Исследование распределения золота и серебра между штейном и шлаком "
+                             "при плавке медного концентрата в печи взвешенной плавки. "
+                             "Извлечение золота в штейн 98%, серебра 95%.",
+                "тип_файла": ".docx",
+                "количество_страниц": 30
+            },
+            {
+                "название": "заметки/идеи.txt",
+                "содержание": "Идея: проверить кучное выщелачивание никеля в холодном климате. "
+                             "Нет данных по этому направлению.",
+                "тип_файла": ".txt",
+                "количество_страниц": 1
+            }
         ]
-
-# ============================================
-# ТЕСТИРОВАНИЕ
-# ============================================
-
-print("=" * 60)
-print("ТЕСТИРОВАНИЕ СЕМАНТИЧЕСКОГО ПОИСКА")
-print("=" * 60)
-
-# 1. Инициализация
-print("\n1. Инициализация поискового движка...")
-config = Config()
-search = Search(config)
-print("✓ Движок готов")
-
-# 2. Добавление тестовых документов
-print("\n2. Добавление тестовых документов...")
-
-test_docs = [
-    {
-        "title": "Электроэкстракция никеля из сульфатных растворов",
-        "abstract": "Исследование процесса электроэкстракции никеля. Оптимальная температура 60°C, скорость потока католита 0.08 м/с. Выход по току 95%.",
-        "year": 2024,
-        "geography": "Россия",
-        "materials": ["никель", "сульфаты", "католит"],
-        "processes": ["электроэкстракция"]
-    },
-    {
-        "title": "Electrowinning of nickel from chloride media",
-        "abstract": "Study of nickel electrowinning process using chloride-based electrolytes. Optimal conditions: 65°C, current density 200 A/m².",
-        "year": 2023,
-        "geography": "Зарубежье",
-        "materials": ["никель", "хлориды", "электролит"],
-        "processes": ["электроэкстракция"]
-    },
-    {
-        "title": "Обессоливание шахтных вод методом обратного осмоса",
-        "abstract": "Применение обратного осмоса для очистки шахтных вод от сульфатов и хлоридов. Исходная концентрация 200-300 мг/л, после очистки менее 50 мг/л.",
-        "year": 2024,
-        "geography": "Россия",
-        "materials": ["сульфаты", "хлориды"],
-        "processes": ["обессоливание", "обратный осмос"]
-    },
-    {
-        "title": "Desalination of mine water using electrodialysis",
-        "abstract": "Electrodialysis treatment of mining wastewater containing sulfates up to 500 mg/L. Removal efficiency >90%.",
-        "year": 2023,
-        "geography": "Зарубежье",
-        "materials": ["сульфаты"],
-        "processes": ["обессоливание", "электродиализ"]
-    },
-    {
-        "title": "Плавка медного концентрата в печи взвешенной плавки",
-        "abstract": "Исследование распределения золота и серебра между штейном и шлаком при плавке медного концентрата. Извлечение Au 98%, Ag 95%.",
-        "year": 2022,
-        "geography": "Россия",
-        "materials": ["медь", "золото", "серебро", "штейн", "шлак"],
-        "processes": ["плавка", "взвешенная плавка"]
-    },
-    {
-        "title": "Кучное выщелачивание золота в холодном климате",
-        "abstract": "Особенности кучного выщелачивания золотосодержащих руд при отрицательных температурах. Применение цианида натрия.",
-        "year": 2021,
-        "geography": "Россия",
-        "materials": ["золото"],
-        "processes": ["выщелачивание", "кучное выщелачивание"]
     }
-]
-
-for doc in test_docs:
-    search.index_document(doc)
-
-print(f"✓ Добавлено {len(test_docs)} документов")
-
-# 3. Тестовые запросы
-print("\n3. Выполнение тестовых запросов...")
-
-test_queries = [
-    {
-        "query": "Какие методы обессоливания шахтных вод существуют?",
-        "description": "Поиск методов обессоливания"
-    },
-    {
-        "query": "электроэкстракция никеля оптимальные параметры",
-        "description": "Параметры электроэкстракции"
-    },
-    {
-        "query": "nickel electrowinning from sulfate solution",
-        "description": "Английский запрос"
-    },
-    {
-        "query": "извлечение драгоценных металлов при плавке",
-        "description": "Плавка и драгметаллы"
-    },
-    {
-        "query": "выщелачивание золота при низких температурах",
-        "description": "Холодный климат"
-    },
-    {
-        "query": "очистка воды от солей",
-        "description": "Синонимы обессоливания"
+    
+    # Создаём поисковый движок
+    print("\n1. Инициализация поискового движка...")
+    search_engine = SemanticSearchJSON()
+    print("✓ Демо-режим (без Elasticsearch)")
+    
+    # Загружаем документы
+    print("\n2. Загрузка документов...")
+    result = search_engine.load_documents(input_json)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    
+    # Тестовые запросы
+    test_queries = [
+        {
+            "query": "Какие методы обессоливания шахтных вод существуют?",
+            "top_k": 3,
+            "min_score": 0.3
+        },
+        {
+            "query": "оптимальные параметры электроэкстракции никеля",
+            "top_k": 3,
+            "filters": {"тип_файла": ".pdf"}
+        },
+        {
+            "query": "nickel electrowinning temperature current density",
+            "top_k": 3
+        },
+        {
+            "query": "распределение драгоценных металлов при плавке",
+            "top_k": 5,
+            "filters": {"мин_страниц": 20}
+        },
+        {
+            "query": "кучное выщелачивание холодный климат",
+            "top_k": 3,
+            "min_score": 0.5
+        }
+    ]
+    
+    print("\n3. Выполнение поисковых запросов...")
+    
+    for i, test_query in enumerate(test_queries, 1):
+        print(f"\n{'='*70}")
+        print(f"ЗАПРОС {i}: {test_query['query']}")
+        if test_query.get('filters'):
+            print(f"Фильтры: {json.dumps(test_query['filters'], ensure_ascii=False)}")
+        print('-'*70)
+        
+        results = search_engine.search(test_query)
+        
+        # Красивый вывод
+        print(f"⏱ Время: {results['метаданные']['время_выполнения_мс']} мс")
+        print(f"📊 Найдено: {results['метаданные']['всего_найдено']}, "
+              f"показано: {results['метаданные']['возвращено']}")
+        
+        for j, result in enumerate(results['результаты'], 1):
+            score_bar = "█" * int(result['релевантность'] * 20)
+            print(f"\n  {j}. {result['название']}")
+            print(f"     Тип: {result['тип_файла']} | "
+                  f"Страниц: {result['страниц']}")
+            print(f"     Релевантность: [{score_bar}] {result['релевантность']:.4f}")
+            print(f"     Фрагмент: {result['фрагмент'][:100]}...")
+        
+        if results.get('рекомендации'):
+            print(f"\n  💡 Рекомендации:")
+            for rec in results['рекомендации']:
+                print(f"     {rec}")
+    
+    # Экспорт результатов в JSON
+    print(f"\n{'='*70}")
+    print("4. Экспорт результатов...")
+    
+    export_query = {
+        "query": "обессоливание воды от сульфатов",
+        "top_k": 3
     }
-]
-
-for test in test_queries:
-    print(f"\n{'='*60}")
-    print(f"Запрос: '{test['query']}'")
-    print(f"Тема: {test['description']}")
-    print('-'*60)
     
-    results = search.semantic_search(test['query'], top_k=3)
+    export_results = search_engine.search(export_query)
     
-    for i, result in enumerate(results, 1):
-        print(f"\n  {i}. {result['title']}")
-        print(f"     Год: {result['year']}")
-        print(f"     Релевантность: {result['score']:.4f}")
-        print(f"     Аннотация: {result['abstract']}")
-
-# 4. Проверка понимания синонимов
-print(f"\n{'='*60}")
-print("ПРОВЕРКА ПОНИМАНИЯ СИНОНИМОВ")
-print('='*60)
-
-synonym_tests = [
-    ("обессоливание воды", "desalination"),
-    ("электроэкстракция", "electrowinning"),
-    ("очистка", "purification"),
-    ("шахтные воды", "mine water"),
-]
-
-for ru_word, en_word in synonym_tests:
-    emb_ru = search.model.encode(ru_word)
-    emb_en = search.model.encode(en_word)
+    with open("search_results.json", "w", encoding="utf-8") as f:
+        json.dump(export_results, f, indent=2, ensure_ascii=False)
     
-    # Косинусное сходство
-    similarity = np.dot(emb_ru, emb_en) / (np.linalg.norm(emb_ru) * np.linalg.norm(emb_en))
+    print("✓ Результаты сохранены в search_results.json")
     
-    print(f"\n  '{ru_word}' ↔ '{en_word}'")
-    print(f"  Сходство: {similarity:.4f} {'✓' if similarity > 0.7 else '✗'}")
+    print(f"\n{'='*70}")
+    print("ТЕСТИРОВАНИЕ ЗАВЕРШЕНО!")
+    print('='*70)
 
-# 5. Очистка (опционально)
-print(f"\n{'='*60}")
-print("ТЕСТИРОВАНИЕ ЗАВЕРШЕНО!")
-print(f"Для очистки индекса выполните:")
-print(f"  curl -X DELETE http://localhost:9200/{config.ES_INDEX}")
-print('='*60)
+
+if __name__ == "__main__":
+    test_semantic_search()
