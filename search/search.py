@@ -6,6 +6,8 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import json
 
+from search.tests import SearchMetadata, SearchResultItem
+
 class SemanticSearchJSON:
     """
     Семантический поиск с JSON интерфейсом.
