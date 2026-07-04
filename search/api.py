@@ -30,7 +30,6 @@ class ESSearch:
     
     def search(self, query, top_k=5):
         q_emb = self.model.encode(query).tolist()
-        # Нужно знать синтаксис kNN запроса
         return self.es.search(index="docs", body={
             "knn": {
                 "field": "embedding",

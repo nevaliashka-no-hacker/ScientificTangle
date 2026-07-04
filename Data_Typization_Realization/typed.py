@@ -7,7 +7,6 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List
 
-# Библиотеки для документов
 from pypdf import PdfReader
 from docx import Document
 from pptx import Presentation
@@ -16,36 +15,19 @@ import rarfile
 
 
 class DocumentTypizer:
-    """
-    Универсальный типизатор документов.
-    Поддерживает: PDF, DOCX, DOC, PPTX, XLSX, XLS, ZIP, RAR, TXT, CSV, JSON, XML
-    """
     
     def __init__(self):
         self.processed_count = 0
         self.error_count = 0
         self.skipped_count = 0
         
-        # Настройка rarfile
-        if os.name == 'nt':  # Windows
+        if os.name == 'nt':
             rarfile.UNRAR_TOOL = r"C:\Program Files\WinRAR\UnRAR.exe"
-        else:  # Linux/Mac
+        else:
             rarfile.UNRAR_TOOL = "unrar"
     
 
-    # ============================================
-    
     def process_zip_file(self, zip_path: str, output_file: str = "documents.json") -> List[Dict]:
-        """
-        Главный метод - обработка ZIP файла
-        
-        Args:
-            zip_path: Путь к ZIP файлу
-            output_file: Имя выходного JSON файла
-        
-        Returns:
-            Список обработанных документов
-        """
         print("=" * 70)
         print(" ТИПИЗАТОР ДОКУМЕНТОВ")
         print("=" * 70)
@@ -65,8 +47,6 @@ class DocumentTypizer:
         return documents
     
 
-    # ============================================
-    
     def _process_archive(self, archive_data: bytes, archive_name: str, parent_path: str) -> List[Dict]:
         documents = []
         
@@ -131,11 +111,11 @@ class DocumentTypizer:
                 if dirs_list:
                     content.append(f"\nПапки ({len(dirs_list)}):")
                     for d in sorted(dirs_list)[:20]:
-                        content.append(f"  📁 {d}")
+                        content.append(f" {d}")
                 
                 content.append(f"\nФайлы:")
                 for f in files_list[:50]:
-                    content.append(f"  📄 {f['имя']} ({f['размер_КБ']} КБ)")
+                    content.append(f" {f['имя']} ({f['размер_КБ']} КБ)")
                 
                 if len(files_list) > 50:
                     content.append(f"  ... и еще {len(files_list) - 50} файлов")
@@ -164,8 +144,6 @@ class DocumentTypizer:
                 except:
                     pass
     
-    # ============================================
-    
     def _process_pdf(self, file_data: bytes, file_path: str) -> Dict:
         try:
             pdf_file = io.BytesIO(file_data)
@@ -193,8 +171,6 @@ class DocumentTypizer:
             print(f"Ошибка: {e}")
             return self._error_doc(file_path, '.pdf', str(e))
     
-    # ============================================
-    
     def _process_docx(self, file_data: bytes, file_path: str) -> Dict:
         try:
             doc_file = io.BytesIO(file_data)
@@ -202,12 +178,10 @@ class DocumentTypizer:
             
             parts = []
             
-            # Параграфы
             for para in doc.paragraphs:
                 if para.text.strip():
                     parts.append(para.text)
             
-            # Таблицы
             tables_count = len(doc.tables)
             for t_num, table in enumerate(doc.tables, 1):
                 parts.append(f"\n[Таблица {t_num}]")
@@ -229,10 +203,8 @@ class DocumentTypizer:
             }
         
         except Exception as e:
-            print(f"    ❌ Ошибка: {e}")
+            print(f"    Ошибка: {e}")
             return self._error_doc(file_path, Path(file_path).suffix.lower(), str(e))
-    
-    # ============================================
     
     def _process_pptx(self, file_data: bytes, file_path: str) -> Dict:
         try:
@@ -258,7 +230,7 @@ class DocumentTypizer:
             
             content = "\n\n".join(slides_text) if slides_text else "Презентация пуста"
             
-            print(f"    ✅ {len(prs.slides)} слайдов")
+            print(f"    {len(prs.slides)} слайдов")
             
             return {
                 "название": file_path,
@@ -272,8 +244,6 @@ class DocumentTypizer:
             print(f"Ошибка: {e}")
             return self._error_doc(file_path, '.pptx', str(e))
 
-    # ============================================
-    
     def _process_xlsx(self, file_data: bytes, file_path: str) -> Dict:
         try:
             excel_file = io.BytesIO(file_data)
@@ -317,7 +287,6 @@ class DocumentTypizer:
         except Exception as e:
             print(f"Ошибка: {e}")
             return self._error_doc(file_path, Path(file_path).suffix.lower(), str(e))
-    # ============================================
     
     def _process_text(self, file_data: bytes, file_path: str) -> Dict:
         ext = Path(file_path).suffix.lower()
@@ -342,15 +311,11 @@ class DocumentTypizer:
             "статус": "success"
         }
     
-    # ============================================
-    
     def _process_file(self, file_data: bytes, file_path: str, ext: str) -> Dict:
         
-        # Архивы
         if ext == '.zip':
-            print(f"    📦 Вложенный архив")
+            print(f"    Вложенный архив")
             nested = self._process_archive(file_data, Path(file_path).stem, str(Path(file_path).parent))
-            # Возвращаем информацию о самом архиве
             return self._get_zip_info(file_data, file_path)
         
         elif ext == '.rar':
@@ -389,7 +354,7 @@ class DocumentTypizer:
                 content = [f"ZIP архив: {len(files)} файлов, {total_size/1024:.1f} КБ"]
                 content.append("\nСодержимое:")
                 for f in files[:50]:
-                    content.append(f"  📄 {f}")
+                    content.append(f"  {f}")
                 
                 if len(files) > 50:
                     content.append(f"  ... и еще {len(files) - 50} файлов")
@@ -430,10 +395,7 @@ class DocumentTypizer:
         else:
             self.skipped_count += 1
     
-    # ============================================
-    
     def _save_to_json(self, documents: List[Dict], output_file: str):
-        """Сохранение в JSON"""
         output = {
             "метаданные": {
                 "дата_обработки": datetime.now().isoformat(),
@@ -452,10 +414,9 @@ class DocumentTypizer:
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(output, f, ensure_ascii=False, indent=2)
         
-        print(f"\n💾 Результат сохранен: {output_file}")
+        print(f"\nРезультат сохранен: {output_file}")
     
     def _get_types_stats(self, documents: List[Dict]) -> Dict:
-        """Статистика по типам файлов"""
         stats = {}
         for doc in documents:
             ext = doc.get("тип_файла", "неизвестный")
@@ -475,28 +436,25 @@ class DocumentTypizer:
         return stats
     
     def _print_stats(self, documents: List[Dict]):
-        """Вывод статистики"""
         print("\n" + "=" * 70)
-        print("📊 СТАТИСТИКА ОБРАБОТКИ")
+        print("СТАТИСТИКА ОБРАБОТКИ")
         print("=" * 70)
         
         stats = self._get_types_stats(documents)
         for ext, stat in sorted(stats.items()):
             print(f"  {ext}: {stat['всего']} всего")
             if stat['успешно']:
-                print(f"    ✅ Успешно: {stat['успешно']}")
+                print(f"   Успешно: {stat['успешно']}")
             if stat['ошибок']:
-                print(f"    ❌ Ошибок: {stat['ошибок']}")
+                print(f"   Ошибок: {stat['ошибок']}")
             if stat['пропущено']:
-                print(f"    ⚠️ Пропущено: {stat['пропущено']}")
+                print(f"   Пропущено: {stat['пропущено']}")
         
-        print(f"\n  📁 Всего документов: {len(documents)}")
-        print(f"  ✅ Успешно: {self.processed_count}")
-        print(f"  ❌ С ошибками: {self.error_count}")
-        print(f"  ⚠️ Пропущено: {self.skipped_count}")
+        print(f"\n Всего документов: {len(documents)}")
+        print(f" Успешно: {self.processed_count}")
+        print(f" С ошибками: {self.error_count}")
+        print(f" Пропущено: {self.skipped_count}")
 
-
-# ============================================
 
 if __name__ == "__main__":
     ZIP_FILE = r"C:\Users\Username\Downloads\archive.zip"  
