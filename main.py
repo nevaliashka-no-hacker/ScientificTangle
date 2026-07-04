@@ -105,34 +105,56 @@ class DocumentPipeline:
         
         patterns = {
             'Material': [
-                'железо', 'медь', 'никель', 'цинк', 'алюминий',
-                'сталь', 'чугун', 'бронза', 'латунь', 'титан'
+                'желез', 'мед', 'никел', 'цинк', 'алюмини',
+                'стал', 'чугун', 'бронз', 'латун', 'титан'
             ],
             'Process': [
-                'плавка', 'обжиг', 'флотация', 'выщелачивание',
-                'электролиз', 'агломерация', 'дробление'
+                'плавк', 'обжиг', 'флотац', 'выщелачива',
+                'электролиз', 'агломерац', 'дроблен'
             ],
             'Equipment': [
-                'печь', 'дробилка', 'мельница', 'фильтр',
-                'центрифуга', 'реактор', 'конвейер'
+                'печ', 'дробилк', 'мельниц', 'фильтр',
+                'центрифуг', 'реактор', 'конвейер'
             ],
             'Property': [
-                'температура', 'давление', 'плотность', 'вязкость',
-                'прочность', 'твердость', 'теплопроводность'
+                'температур', 'давлен', 'плотност', 'вязкост',
+                'прочност', 'твердост', 'теплопроводност'
             ]
         }
         
-        for entity_type, keywords in patterns.items():
-            for keyword in keywords:
-                if keyword in content_lower:
-                    entities.append({
-                        'type': entity_type,
-                        'properties': {
-                            'name': keyword,
-                            'source_document_type': doc_type
-                        },
-                        'confidence': 0.7
-                    })
+        found_entities = set()
+        
+        for entity_type, roots in patterns.items():
+            for root in roots:
+                if root in content_lower:
+                    full_names = {
+                        'желез': 'железо', 'мед': 'медь', 'никел': 'никель',
+                        'цинк': 'цинк', 'алюмини': 'алюминий', 'стал': 'сталь',
+                        'чугун': 'чугун', 'бронз': 'бронза', 'латун': 'латунь',
+                        'титан': 'титан', 'плавк': 'плавка', 'обжиг': 'обжиг',
+                        'флотац': 'флотация', 'выщелачива': 'выщелачивание',
+                        'электролиз': 'электролиз', 'агломерац': 'агломерация',
+                        'дроблен': 'дробление', 'печ': 'печь',
+                        'дробилк': 'дробилка', 'мельниц': 'мельница',
+                        'фильтр': 'фильтр', 'центрифуг': 'центрифуга',
+                        'реактор': 'реактор', 'конвейер': 'конвейер',
+                        'температур': 'температура', 'давлен': 'давление',
+                        'плотност': 'плотность', 'вязкост': 'вязкость',
+                        'прочност': 'прочность', 'твердост': 'твердость',
+                        'теплопроводност': 'теплопроводность'
+                    }
+                    
+                    entity_key = f"{entity_type}:{root}"
+                    if entity_key not in found_entities:
+                        found_entities.add(entity_key)
+                        entities.append({
+                            'type': entity_type,
+                            'properties': {
+                                'name': full_names.get(root, root),
+                                'source_document_type': doc_type
+                            },
+                            'confidence': 0.7
+                        })
         
         return entities
     
@@ -183,31 +205,3 @@ class DocumentPipeline:
                 'связей': self.knowledge_graph.graph.edge_count()
             }
         }
-
-
-def demo_pipeline():
-    
-    pipeline = DocumentPipeline()
-    
-    result = pipeline.process_archive(
-        archive_path="sample_data.zip",
-        build_graph=True,
-        index_for_search=True
-    )
-    
-    print("\n" + "="*70)
-    print("РЕЗУЛЬТАТЫ ОБРАБОТКИ")
-    print("="*70)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    
-    print("\nПОИСК ПО ДОКУМЕНТАМ...")
-    search_result = pipeline.search_and_relate("технология флотации медных руд")
-    print(json.dumps(search_result, ensure_ascii=False, indent=2))
-    
-    pipeline.export_graph("knowledge_graph.json")
-    
-    return pipeline
-
-
-if __name__ == "__main__":
-    pipeline = demo_pipeline()
