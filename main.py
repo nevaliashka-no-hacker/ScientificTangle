@@ -33,10 +33,25 @@ class DocumentPipeline:
         }
     
     def process_archive(self,
-        archive_path: str,
+        archive_path: str = None,
         output_json: str = "documents.json",
         build_graph: bool = True,
-        index_for_search: bool = True) -> Dict:
+        index_for_search: bool = True
+        ) -> Dict:
+
+        if archive_path is None:
+            archive_path = self._ask_archive_path()
+
+        if not os.path.exists(archive_path):
+            raise FileNotFoundError(f"Файл не найден: {archive_path}")
+        
+        if not archive_path.lower().endswith('.zip'):
+            print("Предупреждение: Файл не имеет расширения .zip")
+            user_confirm = input("Продолжить? (y/n): ").strip().lower()
+            if user_confirm != 'y':
+                print("Операция отменена")
+                return {'статус': 'cancelled', 'статистика': self.stats}
+
         print("\n" + "="*70)
         print("ЗАПУСК ПАЙПЛАЙНА ОБРАБОТКИ ДОКУМЕНТОВ")
         print("="*70)

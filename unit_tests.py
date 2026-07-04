@@ -1,6 +1,3 @@
-"""
-Тестовые данные для unit-тестов
-"""
 from datetime import datetime
 
 TEST_DOCUMENTS_JSON = {
