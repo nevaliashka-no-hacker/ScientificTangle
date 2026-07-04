@@ -1,23 +1,37 @@
 version: '3.8'
-
 services:
-  app:
-    build: .
-    volumes:
-      - .:/app
-    environment:
-      - PYTHONUNBUFFERED=1
-    command: python main.py
-
   elasticsearch:
-    image: elasticsearch:8.11.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0 # Укажите вашу версию
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false
+      - xpack.security.enabled=false # Отключаем безопасность для простоты в dev
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
     ports:
       - "9200:9200"
+      - "9300:9300"
     volumes:
       - es_data:/usr/share/elasticsearch/data
+    networks:
+      - app-network
+
+  app:
+    build: .
+    ports:
+      - "8000:8000" # или ваш порт
+    environment:
+      - ELASTICSEARCH_HOST=elasticsearch # Имя сервиса в docker-compose!
+      - ELASTICSEARCH_PORT=9200
+      - ELASTICSEARCH_SCHEME=http
+    depends_on:
+      - elasticsearch
+    volumes:
+      - .:/app # Монтируем код для разработки
+    networks:
+      - app-network
 
 volumes:
   es_data:
+
+networks:
+  app-network:
+    driver: bridge

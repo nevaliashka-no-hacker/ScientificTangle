@@ -295,17 +295,6 @@ class DocumentPipeline:
         return facilities
     
     def _literature(self, query):
-        """Поиск литературы с проверкой доступности"""
-        if self.search_engine is None:
-            return [{
-                'название': 'Поисковый движок недоступен',
-                'тип': 'system',
-                'релевантность': 0,
-                'фрагмент': 'Настройте модуль поиска или проверьте Elasticsearch',
-                'ключевые_слова': [],
-                'страниц': 0
-            }]
-        
         try:
             r = self.search_engine.search({"query": query, "top_k": 10})
             return [{
@@ -316,16 +305,8 @@ class DocumentPipeline:
                 'ключевые_слова': d.get('related_entities', []),
                 'страниц': d.get('страниц', 0)
             } for d in r.get('результаты', [])]
-        except Exception as e:
-            print(f"[WARNING] Ошибка поиска литературы: {e}", file=sys.stderr)
-            return [{
-                'название': f'Ошибка поиска',
-                'тип': 'error',
-                'релевантность': 0,
-                'фрагмент': str(e)[:300],
-                'ключевые_слова': [],
-                'страниц': 0
-            }]
+        except:
+            return []
     
     def _graph(self):
         g = {'узлы': [], 'связи': []}
@@ -363,53 +344,22 @@ class DocumentPipeline:
 
 
 # ============================================================
-# API ДЛЯ ФРОНТЕНДА (Запуск через командную строку)
+# API ДЛЯ ФРОНТЕНДА
 # ============================================================
-import argparse
-import sys
-import json
-from pathlib import Path
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ScientificTangle Backend API")
-    parser.add_argument("--query", type=str, required=True, help="Поисковый запрос от пользователя")
-    args = parser.parse_args()
+pipeline = DocumentPipeline()
 
-    FIXED_OUTPUT_FILE = Path(__file__).parent / "result.json"
 
-    try:
-        print(f"[BACKEND] Инициализация пайплайна...", file=sys.stderr)
-        pipeline = DocumentPipeline()
-        
-        print(f"[BACKEND] Выполнение поиска по запросу: '{args.query}'", file=sys.stderr)
-        
-        # Пробуем выполнить полный поиск
-        pipeline.get_full_json(args.query, filepath=str(FIXED_OUTPUT_FILE))
-        
-        print(f"[BACKEND] Успешно сохранено в {FIXED_OUTPUT_FILE}", file=sys.stderr)
-        
-    except Exception as e:
-        error_message = str(e)
-        print(f"[BACKEND WARNING] Ошибка поиска: {error_message}", file=sys.stderr)
-        
-        # FALLBACK: Если упали (например, нет индекса Elastic), 
-        # все равно сохраняем валидный JSON, чтобы фронтенд не упал с ошибкой
-        fallback_result = {
-            "статус": "error",
-            "сообщение": f"Не удалось выполнить полный поиск: {error_message}. Возможно, не создан индекс Elasticsearch или не загружены документы.",
-            "запрос": args.query,
-            "время_выполнения": "0 сек",
-            "извлечено_из_запроса": {"материалы": [], "процессы": [], "оборудование": []},
-            "цепочки": [],
-            "пробелы": [],
-            "материалы": [],
-            "эксперты": [],
-            "лаборатории": [],
-            "литература": [], # Ошибка была тут
-            "граф": {"узлы": [], "связи": []}
-        }
-        
-        with open(FIXED_OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            json.dump(fallback_result, f, ensure_ascii=False, indent=2)
-            
-        print(f"[BACKEND] Сохранен fallback-результат (пустой JSON) в {FIXED_OUTPUT_FILE}", file=sys.stderr)
+def load_documents(archive_path: str) -> Dict:
+    return pipeline.process_archive(archive_path)
+
+
+def get_full_json(query: str, filepath: str = None) -> str:
+    """
+    Возвращает ОДИН JSON со всеми результатами.
+    
+    Использование:
+        json_string = get_full_json("медь флотация")
+        get_full_json("медь флотация", "result.json")  # сохранит в файл
+    """
+    return pipeline.get_full_json(query, filepath)

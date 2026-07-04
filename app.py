@@ -14,6 +14,7 @@ OUTPUT_JSON_PATH = Path(__file__).parent / "result.json"
 BACKEND_SCRIPT_PATH = Path(__file__).parent / "main.py"
 
 
+
 def main():
     st.set_page_config(page_title="ScientificTangle", layout="wide", page_icon="🧬")
     
